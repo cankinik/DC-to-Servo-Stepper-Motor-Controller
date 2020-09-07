@@ -1,0 +1,94 @@
+#include "mbed.h"
+#include "LCD_DISCO_F469NI.h"
+#include "stm32f4xx_hal.h"
+#include "stm32f4xx.h"
+#include "stm32f4xx_hal_gpio.h"
+#include "stdio.h"
+#include <iostream>   
+#include <string>     
+
+using namespace std; 
+
+//Pins
+AnalogIn analogPin(PB_1);    //Pin A0
+AnalogIn periodPin(PC_2);    //Pin A1
+PwmOut pwm(PB_15);           //Pin 11
+InterruptIn button(PA_0);   
+
+//Functions
+uint8_t* toUint(float input);
+void flip(void);
+void buttonInterrupt(void);
+
+//Entities
+LCD_DISCO_F469NI lcd;
+Timeout t;
+
+const int windowMargin = 20;                //Margin left from all sides of the screen for aesthetic reaasons.
+uint32_t horizontalSize = lcd.GetXSize();
+uint32_t verticalSize = lcd.GetYSize();
+int verticalMultiplier = (int)verticalSize - 2 * windowMargin;  //Scaling coefficient to adjust the vertical position.
+double ADCData;
+uint16_t oldY;
+uint16_t newY;
+int horizontalPosition;
+
+bool newDataAvailable;
+float period;
+bool stopped;
+
+
+int main()
+{
+    newDataAvailable = false;
+    stopped = false;
+    horizontalPosition = windowMargin;          //Start drawing from the left side + margin.   
+    pwm.period(1);                              //For testing.
+    pwm.write(0.6);                             //For testing.
+    lcd.DisplayStringAt(windowMargin, verticalSize - windowMargin, (uint8_t *)"| | | | | | | | | | | | | | | | | | | | | | | | | | | |", LEFT_MODE);        //Displaying time dividends under the screen. 
+    button.rise(&buttonInterrupt);              //Attaching button interrupt
+    flip();                                     //Initiate the timeout ISR for the first iteration so that the period will be set through the reading on the ADC pin.
+    
+    while(true)
+    {     
+        while(!newDataAvailable || stopped){};  //Wait until new data arrives.
+        newDataAvailable = false;               //Reset boolean for the next data.
+        
+        newY = (uint16_t)( verticalSize - (ADCData * verticalMultiplier + windowMargin) );    //Pixel position on the vertical axis is determined by the input voltage scaled appropriately.      
+        
+        if (horizontalPosition >= horizontalSize - windowMargin )   //If the screen has been used up from left to right, then set the position to beginning, reset the screen and display the time dividends again.
+        { 
+            horizontalPosition = windowMargin;
+            lcd.Clear(LCD_COLOR_WHITE);  
+            lcd.DisplayStringAt(windowMargin, verticalSize - windowMargin, (uint8_t *)"| | | | | | | | | | | | | | | | | | | | | | | | | | | |", LEFT_MODE);            
+        }
+        else
+        {
+            lcd.DrawLine( (uint16_t)(horizontalPosition), oldY, (uint16_t)(horizontalPosition + 1), newY);  //Draw a line from the last data's pixel to the new data's pixel.
+        }
+        oldY = newY;
+        lcd.DisplayStringAt(0, 0, toUint(ADCData * 3.3), RIGHT_MODE);   //Display the scaled voltage value on the top right corner of the screen.
+        lcd.DisplayStringAt(0, 0, toUint(28 * period), LEFT_MODE);      //Display the time interval represented by each dividend on the top left corner of the screen (There are 28 pixels of space in between the time dividends and each correspond to one period).
+    }    
+}
+
+uint8_t* toUint(float input)        //Function to converts a floating point number into a uint8_t variable so that it can be displayed on the screen.
+{
+        char buf[10];
+        sprintf(buf, "%f", input);
+        string temp = buf;
+        uint8_t* result = (uint8_t*)(temp.c_str());
+        return result;
+}
+void flip()                         //Timeout ISR that repeats every period. The period is adjusted according to the value at the ADC pin reading the potentiometer value. Each tick indicates new data so the position is incremented and the flag is set.
+{
+    ADCData = analogPin;
+    period = periodPin / 10;
+    t.attach(&flip, period);
+    newDataAvailable = true;
+    horizontalPosition++;
+}
+void buttonInterrupt()              //Button ISR that flips the stopped flag to either pause or start the LCD screen of the oscilloscope.
+{
+    stopped = !stopped;
+}
